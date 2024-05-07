@@ -8,7 +8,7 @@ First, create a new conda environment with requirements:
 ```
 conda create --name ds_prepro python=3.9
 conda activate ds_prepro
-pip install scipy soundfile pyloudnorm pandas pyo numpy opencv-python
+pip install soundfile pandas opencv-python
 ```
 
 Second, install dependencies such as ffmpeg.
@@ -30,7 +30,7 @@ conda develop "$(pwd)/prepro"
 
 Now you put the raw data collected with ducksoup in a folder called "data/first_data_set and execute the process_video_example.py script:
 ```
-python 
+python process_video_example.py
 
 ```
 
