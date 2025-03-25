@@ -1,7 +1,7 @@
 # Local Installation of FFmpeg + x264 on an HPC (No Root)
 
-Below is one **complete** Markdown file. You can copy/paste it directly into a repository **as is**. It explains how to install [NASM](https://www.nasm.us/), [x264](https://www.videolan.org/developers/x264.html), and [FFmpeg](https://ffmpeg.org/) into a **user-only directory** (`/mnt/data/project0028`) on an HPC system (no root privileges).  
-This yields a **fully functional** FFmpeg with H.264 encoding via `libx264`.
+Below I explain how to install [NASM](https://www.nasm.us/), [x264](https://www.videolan.org/developers/x264.html), and [FFmpeg](https://ffmpeg.org/) into a **user-only directory** (`/mnt/data/project0028`) on an HPC system (no root privileges).  
+This yields a **fully functional** FFmpeg with H.264 encoding via `libx264`, which is required to preprocess ducksoup video files.
 
 ---
 
