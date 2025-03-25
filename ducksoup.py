@@ -74,6 +74,9 @@ def trim_folder(source_folder, folder_tag, target_folder, trimed_path, extension
         file_name = get_file_without_path(file, with_extension=True)
         start = d[file_name]
         length = get_movie_duration(file) - start
+        if length <= 0:
+            continue
+
         start = str(datetime.timedelta(seconds=start))
         if not os.path.isdir(target_folder + trimed_path + folder_tag):
             os.mkdir(target_folder + trimed_path + folder_tag)
