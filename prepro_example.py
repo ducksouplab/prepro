@@ -7,6 +7,6 @@ print("Starting analysis")
 
 session_name = "first_data_set" # COMPLETE
 
-ds_process_parallel(sources = "data/"+session_name+"/*/recordings/", target_folder="preproc/"+session_name+"/")
+ds_process_parallel(sources = "data/"+session_name+"/*/recordings/", target_folder="preproc/"+session_name+"/", folder_tag= "session_name")
 
 print("Finished analysis")
