@@ -358,7 +358,7 @@ def ds_process(source_folder
 
 
 ## Parallel processing functions
-def parallelize_function(source_folder, folder_tag_idx =-3
+def parallelize_function(source_folder, folder_tag ="session/"
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -374,7 +374,6 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                                     , target_fps=30
                                     ):
     
-    folder_tag = source_folder.split("/")[folder_tag_idx] + "/"
     print("the folder tag is : " + folder_tag)
 
     ds_process(source_folder = source_folder
@@ -394,7 +393,7 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                     , target_fps=target_fps
                     )
 
-def ds_process_parallel(sources , folder_tag_idx =-3
+def ds_process_parallel(sources , folder_tag ="session/"
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -423,7 +422,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
     a_args     = glob.glob(sources)
     
     pool_obj.starmap(parallelize_function, zip(a_args
-                                  , repeat(folder_tag_idx)
+                                  , repeat(folder_tag)
                                   , repeat(target_folder)
                                   , repeat(extension)
                                   , repeat(trimed_path)
