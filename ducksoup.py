@@ -410,7 +410,7 @@ def ds_process_parallel(sources , folder_tag ="session/"
                                     ):
     """
         from ducksoup import ds_process_parallel
-        folder_tag_idx : is the place where the * is, in the path. The place where recoridngs are blocked by.
+        folder_tag : is the name of the session you want to preprocess. 
         ds_process_parallel(sources = "videos/latest_30_10_b/test_2/*/recordings/")
         check help(ds_process) for other arguments
 
