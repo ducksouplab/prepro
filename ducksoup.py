@@ -1,5 +1,6 @@
 from video_processing import combine_videos, get_movie_duration, change_frame_rate, extract_audio, combine_audio, replace_audio, extract_sub_video_sentences, re_encode, combine_2_videos
 from conversions import get_file_without_path
+from pathlib import Path
 import glob
 import os
 import numpy as np
@@ -358,7 +359,7 @@ def ds_process(source_folder
 
 
 ## Parallel processing functions
-def parallelize_function(source_folder, folder_tag ="session/"
+def parallelize_function(source_folder, folder_tag_idx =-3
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -374,6 +375,7 @@ def parallelize_function(source_folder, folder_tag ="session/"
                                     , target_fps=30
                                     ):
     
+    folder_tag = Path(source_folder).parts[folder_tag_idx] + "/"
     print("the folder tag is : " + folder_tag)
 
     ds_process(source_folder = source_folder
@@ -393,7 +395,7 @@ def parallelize_function(source_folder, folder_tag ="session/"
                     , target_fps=target_fps
                     )
 
-def ds_process_parallel(sources , folder_tag ="session/"
+def ds_process_parallel(sources , folder_tag_idx =-3
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -410,7 +412,7 @@ def ds_process_parallel(sources , folder_tag ="session/"
                                     ):
     """
         from ducksoup import ds_process_parallel
-        folder_tag : is the name of the session you want to preprocess. 
+        folder_tag_idx : is the place where the * is, in the path. The place where recoridngs are blocked by.
         ds_process_parallel(sources = "videos/latest_30_10_b/test_2/*/recordings/")
         check help(ds_process) for other arguments
 
@@ -422,7 +424,7 @@ def ds_process_parallel(sources , folder_tag ="session/"
     a_args     = glob.glob(sources)
     
     pool_obj.starmap(parallelize_function, zip(a_args
-                                  , repeat(folder_tag)
+                                  , repeat(folder_tag_idx)
                                   , repeat(target_folder)
                                   , repeat(extension)
                                   , repeat(trimed_path)
