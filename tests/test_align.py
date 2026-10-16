@@ -155,7 +155,7 @@ def test_resolution_change_empty_file_and_fragment_before_start(tmp_path):
              dict(name=name(-15, "p1", 2, "dry"), empty=True),
              dict(name=name(-12, "p1", 3, "dry"), rec_start=-10, length=30),   # cut by 10 s
              dict(name=name(-2, "p2", 1, "dry"), rec_start=0, length=20, size=(320, 240), size2=(640, 480))]
-    rows, out = run(tmp_path, files, log=[("p1", -28), ("p1", -10), ("p2", 0)])
+    rows, out = run(tmp_path, files, log=[("p1", -28), ("p1", -13), ("p1", -10), ("p2", 0)])  # the empty file had a pipeline too
     status = sorted(r["status"] for r in rows)
     assert status.count("ok") == 2 and "skipped_empty_file" in status and "skipped_before_t0" in status
     r1 = next(r for r in rows if r.get("user") == "p1")
@@ -165,6 +165,20 @@ def test_resolution_change_empty_file_and_fragment_before_start(tmp_path):
     # p2's synthetic clip is two Opus encodes joined with -c copy: the join itself leaves ~20 ms of
     # encoder padding in the source, which the aligner keeps (it follows the audio timestamps)
     check(out, r2, 0, [(0, 20)], audio_tol=0.03)
+
+
+def test_quick_reconnections_each_get_their_own_start(tmp_path):
+    """p2 reconnects twice in a row; the third file is named (joined) before the second one's recording
+    started, so a 'first event after the name' rule would give both files the same start."""
+    files = [dict(name=name(-3, "p1", 1, "dry"), rec_start=0, length=20),
+             dict(name=name(-1, "p2", 1, "dry"), rec_start=0, length=8),
+             dict(name=name(9, "p2", 2, "dry"), rec_start=10, length=0.7),
+             dict(name=name(10, "p2", 3, "dry"), rec_start=12.5, length=7.5)]
+    rows, out = run(tmp_path, files, log=[("p1", 0), ("p2", 0), ("p2", 10), ("p2", 12.5)])
+    r2 = next(r for r in rows if r.get("user") == "p2")
+    seg = json.loads(r2["segments"])
+    assert [round(x["t_begin"], 2) for x in seg] == [0, 10, 12.5] and all(x["cut_s"] == 0 for x in seg)
+    check(out, r2, 0, [(0, 8), (10, 10.7), (12.5, 20)])
 
 
 def test_missing_first_recording_gives_a_leading_gap(tmp_path):

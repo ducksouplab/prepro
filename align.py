@@ -93,14 +93,26 @@ def read_logs(log_folder):
     return {u: sorted(v) for u, v in starts.items()}, sorted(interaction)
 
 
-def recording_start(name_time, user, pipeline_starts, before=2.0, after=60.0):
-    """Start of the recording of a file: the user's first `pipeline_started` within
-    [name_time - before, name_time + after] seconds, else the time in the file name."""
-    for t in pipeline_starts.get(user, []):
-        dt = (t - name_time).total_seconds()
-        if -before <= dt <= after:
-            return t, "log"
-    return name_time, "file_name"
+def recording_starts(name_times, pipeline_starts, before=2.0, after=60.0):
+    """Start of the recording of every file, from its user and the time in its name.
+
+    name_times: {user: iterable of name times} (one per connection; dry and wet files of the same
+    connection share the name time and therefore the start).
+    Each `pipeline_started` event of a user is given to one connection only, in order: the first
+    unused event within [name_time - before, name_time + after] s. Without one, the name time is used.
+    Returns {(user, name_time): (start, "log" | "file_name")}."""
+    out = {}
+    for user, times in name_times.items():
+        events, k = pipeline_starts.get(user, []), 0
+        for T in sorted(set(times)):
+            while k < len(events) and (events[k] - T).total_seconds() < -before:
+                k += 1
+            if k < len(events) and (events[k] - T).total_seconds() <= after:
+                out[(user, T)] = (events[k], "log")
+                k += 1
+            else:
+                out[(user, T)] = (T, "file_name")
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -150,13 +162,19 @@ def plan_interaction(source_folder, extension=".mp4", manips=("dry", "wet"), log
     if log_folder is None:
         log_folder = os.path.dirname(os.path.normpath(source_folder))
     pipeline_starts, interaction_starts = read_logs(log_folder)
-    files, notes = [], []
+    metas, notes = {}, []
     for f in sorted(glob.glob(os.path.join(source_folder, "*" + extension))):
         try:
-            meta = parse_name(f)
+            metas[f] = parse_name(f)
         except (ValueError, IndexError):
             notes.append((f, "unparsable_name"))
-            continue
+    # all files, empty ones included, take part in the matching so that events are used in order
+    name_times = {}
+    for m in metas.values():
+        name_times.setdefault(m["user"], []).append(m["name_time"])
+    starts = recording_starts(name_times, pipeline_starts)
+    files = []
+    for f, meta in metas.items():
         if manips and meta["manip"] not in manips and meta["manip"] != "other":
             continue
         if os.path.getsize(f) == 0:
@@ -167,7 +185,7 @@ def plan_interaction(source_folder, extension=".mp4", manips=("dry", "wet"), log
         if not length:
             notes.append((f, "unreadable"))
             continue
-        start, source = recording_start(meta["name_time"], meta["user"], pipeline_starts)
+        start, source = starts[(meta["user"], meta["name_time"])]
         files.append(dict(path=f, start=start, start_source=source, length=length, **meta, **info))
     if not files:
         return [], notes
@@ -227,32 +245,47 @@ def plan_interaction(source_folder, extension=".mp4", manips=("dry", "wet"), log
 # ---------------------------------------------------------------------------------------------
 def build_command(plan, out_video, out_wav=None, fps=30, crf=0, preset="veryfast", audio_codec="aac",
                   audio_bitrate="320k", sample_rate=48000, wav_codec="pcm_s16le", threads=0):
-    """ffmpeg command (list) that renders one plan."""
+    """ffmpeg command (list) that renders one plan.
+
+    Segment and gap boundaries are snapped to the output frame grid (multiples of 1/fps from t0), so
+    that frame rounding cannot accumulate over segments; the content of each segment is shifted by its
+    snapping remainder (cut a bit more, or padded by less than one frame), so it stays at its true time
+    (audio to the sample, video to the frame)."""
     W, H = plan["width"], plan["height"]
+    fps_f = float(fps)
     layout = "mono" if plan["channels"] == 1 else "stereo"
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-y"]
-    filters, labels, k_in = [], [], 0
+    filters, labels, k_in, prev_end = [], [], 0, 0
     for i, s in enumerate(plan["segments"]):
-        gap = s["gap_before"]
-        if gap > 0.04:
+        b, e = round(s["t_begin"] * fps_f), round(s["t_end"] * fps_f)
+        if e <= b:
+            continue
+        gap_frames = b - prev_end
+        if gap_frames > 0:
+            gap = gap_frames / fps_f
             if plan["has_video"]:
-                filters.append(f"color=c=black:s={W}x{H}:r={fps}:d={gap:.3f},format=yuv420p,setsar=1[gv{i}]")
-            filters.append(f"anullsrc=r={sample_rate}:cl={layout},atrim=duration={gap:.3f},asetpts=PTS-STARTPTS[ga{i}]")
+                filters.append(f"color=c=black:s={W}x{H}:r={fps}:d={gap:.6f},format=yuv420p,setsar=1,"
+                               f"trim=end_frame={gap_frames},setpts=PTS-STARTPTS[gv{i}]")
+            filters.append(f"anullsrc=r={sample_rate}:cl={layout},atrim=duration={gap:.6f},asetpts=PTS-STARTPTS[ga{i}]")
             labels.append((f"[gv{i}]" if plan["has_video"] else "") + f"[ga{i}]")
-        d = s["t_end"] - s["t_begin"]
-        if s["cut"] > 0:
-            cmd += ["-ss", f"{s['cut']:.3f}"]
+        prev_end = e
+        d, n_frames = (e - b) / fps_f, e - b
+        r = b / fps_f - s["t_begin"]          # > 0: the grid point is after the true start -> cut more
+        cut, pad = s["cut"] + max(r, 0.0), max(-r, 0.0)
+        if cut > 0:
+            cmd += ["-ss", f"{cut:.6f}"]
         cmd += ["-reinit_filter", "0", "-i", s["path"]]
         if plan["has_video"]:
             filters.append(f"[{k_in}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                           f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=fps={fps}:start_time=0,format=yuv420p,"
-                           f"tpad=stop_mode=add:stop_duration={d:.3f},trim=duration={d:.3f},setpts=PTS-STARTPTS[v{i}]")
+                           f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS+{pad:.6f}/TB,"
+                           f"fps=fps={fps}:start_time=0,format=yuv420p,"
+                           f"tpad=stop_mode=add:stop_duration={d:.6f},trim=end_frame={n_frames},setpts=PTS-STARTPTS[v{i}]")
         if s["has_audio"]:
-            filters.append(f"[{k_in}:a]aresample=async=1:first_pts=0,"
+            filters.append(f"[{k_in}:a]asetpts=PTS+{pad:.6f}/TB,aresample=async=1:first_pts=0,"
                            f"aformat=sample_rates={sample_rate}:channel_layouts={layout},"
-                           f"apad=whole_dur={d:.3f},atrim=duration={d:.3f},asetpts=PTS-STARTPTS[a{i}]")
+                           f"apad=whole_dur={d:.6f},atrim=duration={d:.6f},asetpts=PTS-STARTPTS[a{i}]")
         else:
-            filters.append(f"anullsrc=r={sample_rate}:cl={layout},atrim=duration={d:.3f},asetpts=PTS-STARTPTS[a{i}]")
+            filters.append(f"anullsrc=r={sample_rate}:cl={layout},atrim=duration={d:.6f},asetpts=PTS-STARTPTS[a{i}]")
         labels.append((f"[v{i}]" if plan["has_video"] else "") + f"[a{i}]")
         k_in += 1
     n = len(labels)
