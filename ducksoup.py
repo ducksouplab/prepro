@@ -1,5 +1,9 @@
 from video_processing import combine_videos, get_movie_duration, change_frame_rate, extract_audio, combine_audio, replace_audio, extract_sub_video_sentences, re_encode, combine_2_videos
 from conversions import get_file_without_path
+try:
+    from .align import align_folder
+except ImportError:
+    from align import align_folder
 from pathlib import Path
 import glob
 import os
@@ -32,6 +36,13 @@ def get_hour(file_tag):
 
 ##-- trim_folder
 def trim_folder(source_folder, folder_tag, target_folder, trimed_path, extension=".mp4", verbose=True):
+    """
+    | LEGACY, kept for single_pass=False. Use align.align_folder instead.
+    | This function takes the start of each recording from its file name (the time the participant joined,
+    | not the time the recording started) and cuts every file to start at the latest file start of the
+    | folder. This shifts the partners relative to each other by the difference of their join times, and
+    | when a participant reconnects (-c-2-, ...) everything recorded before the reconnection is lost.
+    """
     #Compute the delays in the videos
     if verbose:
         print("Computing video deltas with ffmpeg...")
@@ -131,6 +142,30 @@ def change_fps_folder(source_folder, folder_tag, target_folder, change_fps_path=
         change_frame_rate(source=file, output=output, target_fps=target_fps, overwrite=True)
 
 
+##-- stack_videos
+def stack_videos(files, output, tile="640:480"):
+    """
+    | Check video: 2 videos side by side, or 4 in a 2x2 grid (order: top left, top right, bottom left, bottom right).
+    | Each input is scaled to fit the tile (aspect ratio kept, padded), so inputs of different sizes can be stacked.
+    | Video only; the audio is added by combine_folder.
+    """
+    import subprocess
+    w, h = tile.split(":")
+    fit = "".join("[%d:v]scale=%s:%s:force_original_aspect_ratio=decrease,pad=%s:%s:(ow-iw)/2:(oh-ih)/2,setsar=1[s%d];"
+                  % (i, w, h, w, h, i) for i in range(len(files)))
+    if len(files) == 4:
+        stack = "[s0][s1]hstack[t];[s2][s3]hstack[b];[t][b]vstack[v]"
+    elif len(files) == 2:
+        stack = "[s0][s1]hstack[v]"
+    else:
+        raise ValueError("stack_videos needs 2 or 4 videos")
+    cmd = ["ffmpeg", "-y"]
+    for f in files:
+        cmd += ["-i", f]
+    cmd += ["-filter_complex", fit + stack, "-map", "[v]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-shortest", output]
+    subprocess.call(cmd)
+
+
 ##-- combine_folder
 def combine_folder(source_folder, folder_tag, target_folder, combined_path, combined_with_audio_path,extension= ".mp4", combine_audio_flag=True, verbose=True):
     if verbose:
@@ -166,12 +201,9 @@ def combine_folder(source_folder, folder_tag, target_folder, combined_path, comb
     
     output = target_folder+combined_path + combined_video_name + extension
     #Dyads with manipulated and non-manipulated
-    if len(organised_files) == 4: 
-        combine_videos( tl = organised_files[0], tr = organised_files[1], bl = organised_files[2], br = organised_files[3], output= output)
-    
-    #Dyads without manipulated
-    elif len(organised_files) == 2:
-        combine_2_videos(organised_files[0], organised_files[1], output, combine_audio_flag=False)
+    #(inputs are scaled to a common tile, as the single-pass outputs keep each participant's native resolution)
+    if len(organised_files) in (2, 4):
+        stack_videos(organised_files, output)
 
 
     #extract and combine audios
@@ -206,9 +238,16 @@ def ds_process_audio_only(source_folder
                             , extension=".ogg"
                             , trimed_path="trimed/"
                             , combined_path = "combined_audio/"
+                            , single_pass=True
+                            , log_folder=None
+                            , duration=None
                             , verbose=True):
-    
-    import soundfile as sf
+    """
+    | Aligns the audio recordings of one interaction and mixes the two participants (dry and wet).
+    | single_pass=True (default): align.align_folder, aligned on the recording starts read from the DuckSoup
+    |     logs, reconnections joined, written as lossless WAV files in trimed_path/folder_tag.
+    | single_pass=False: legacy trim_folder (see its docstring for the alignment problems).
+    """
     from transform_audio import combine_audio_files
 
     os.makedirs(target_folder, exist_ok=True)
@@ -217,13 +256,19 @@ def ds_process_audio_only(source_folder
         return
 
     # trim audio files so they are in sync
-    trim_folder(source_folder=source_folder
-                , folder_tag=folder_tag
-                , target_folder=target_folder
-                , trimed_path=trimed_path
-                , extension=extension
-                , verbose=verbose
-                )
+    if single_pass:
+        align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
+                     , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
+                     , video_out=False, write_wav=True, verbose=verbose)
+        extension = ".wav"
+    else:
+        trim_folder(source_folder=source_folder
+                    , folder_tag=folder_tag
+                    , target_folder=target_folder
+                    , trimed_path=trimed_path
+                    , extension=extension
+                    , verbose=verbose
+                    )
 
     # 
     source_folder = target_folder + trimed_path + folder_tag
@@ -274,6 +319,12 @@ def ds_process(source_folder
                             , preset="veryslow"
                             , crf = "18"
                             , target_fps = "30"
+                            , single_pass=True
+                            , crf_single_pass=0
+                            , log_folder=None
+                            , duration=None
+                            , write_wav=True
+                            , ffmpeg_threads=0
                             ):
     """
     | A function to preprocess recordings made with ducksoup.
@@ -294,6 +345,15 @@ def ds_process(source_folder
     |    preset="veryslow" This is the preset used by open CV
     |    crf = "18" CRF is the factor quality. CRF : use 18 for almost lossless. Lower is better but takes more size. More info here : https://superuser.com/questions/1556953/why-does-preset-veryfast-in-ffmpeg-generate-the-most-compressed-file-compared
     |    target_fps = "30" Target FPS to resample videos
+    |    single_pass=True : align and encode in ONE ffmpeg pass with align.align_folder (default):
+    |        aligned on the recording starts read from the DuckSoup logs (log_folder, default: the parent of
+    |        source_folder), reconnection segments joined on one timeline with the gaps filled with black frames
+    |        and silence, native resolution (resolution and re_encode_path are not used), constant target_fps,
+    |        x264 at crf_single_pass (0 = lossless), a lossless WAV next to each mp4 (write_wav), and a manifest
+    |        trimed_path/folder_tag/alignment.csv with the gaps and the covered time of each output.
+    |        duration: optional maximum length of the outputs (s). ffmpeg_threads: threads per ffmpeg (0 = auto).
+    |    single_pass=False : legacy chain re-encode -> change fps -> trim_folder (three lossy encodes, and the
+    |        alignment problems described in trim_folder).
     | Usage Example: 
     |
     | from ducksoup_preproc import ds_process
@@ -318,6 +378,23 @@ def ds_process(source_folder
         print(folder_tag)
         print()
     
+    if single_pass:
+        align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
+                     , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
+                     , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=crf_single_pass
+                     , threads=ffmpeg_threads)
+        if combine_videos:
+            combine_folder(source_folder=target_folder + trimed_path + folder_tag
+                           , folder_tag=folder_tag
+                           , target_folder=target_folder
+                           , combined_path=combined_path
+                           , combined_with_audio_path=combined_with_audio_path
+                           , extension=".mp4"
+                           , verbose=verbose
+                           , combine_audio_flag=combine_audio_flag
+                           )
+        return
+
     #reencode
     re_encode_folder(source_folder=source_folder
                      , folder_tag=folder_tag
@@ -373,6 +450,8 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                                     , preset="slow"
                                     , crf = "18"
                                     , target_fps=30
+                                    , single_pass=True
+                                    , ffmpeg_threads=0
                                     ):
     
     folder_tag = Path(source_folder).parts[folder_tag_idx] + "/"
@@ -393,6 +472,8 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                     , preset=preset
                     , crf = crf
                     , target_fps=target_fps
+                    , single_pass=single_pass
+                    , ffmpeg_threads=ffmpeg_threads
                     )
 
 def ds_process_parallel(sources , folder_tag_idx =-3
@@ -409,18 +490,24 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                     , preset="slow"
                                     , crf = "18"   
                                     , target_fps=30                     
+                                    , single_pass=True
+                                    , processes=None
+                                    , ffmpeg_threads=0
                                     ):
     """
         from ducksoup import ds_process_parallel
         folder_tag_idx : is the place where the * is, in the path. The place where recoridngs are blocked by.
         ds_process_parallel(sources = "videos/latest_30_10_b/test_2/*/recordings/")
         check help(ds_process) for other arguments
+        processes : number of interactions processed in parallel (default: all cores of the machine; on a cluster,
+            use the cores allocated to the job, e.g. int(os.environ["SLURM_CPUS_PER_TASK"]) // ffmpeg_threads)
+        ffmpeg_threads : threads per ffmpeg process (0 = auto, i.e. all cores)
 
     """
     import multiprocessing
     from itertools import repeat
     
-    pool_obj = multiprocessing.Pool()
+    pool_obj = multiprocessing.Pool(processes)
     a_args     = glob.glob(sources)
     
     pool_obj.starmap(parallelize_function, zip(a_args
@@ -438,5 +525,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                   , repeat(preset)
                                   , repeat(crf)
                                   , repeat(target_fps)
+                                  , repeat(single_pass)
+                                  , repeat(ffmpeg_threads)
                                   )
                     )
