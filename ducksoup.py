@@ -320,7 +320,8 @@ def ds_process(source_folder
                             , crf = "18"
                             , target_fps = "30"
                             , single_pass=True
-                            , crf_single_pass=0
+                            , lossless=True
+                            , crf_single_pass=18
                             , log_folder=None
                             , duration=None
                             , write_wav=True
@@ -349,7 +350,8 @@ def ds_process(source_folder
     |        aligned on the recording starts read from the DuckSoup logs (log_folder, default: the parent of
     |        source_folder), reconnection segments joined on one timeline with the gaps filled with black frames
     |        and silence, native resolution (resolution and re_encode_path are not used), constant target_fps,
-    |        x264 at crf_single_pass (0 = lossless), a lossless WAV next to each mp4 (write_wav), and a manifest
+    |        x264 lossless if lossless=True (default, large files), else at crf_single_pass (default 18, visually
+    |        lossless and much smaller), a lossless WAV next to each mp4 (write_wav), and a manifest
     |        trimed_path/folder_tag/alignment.csv with the gaps and the covered time of each output.
     |        duration: optional maximum length of the outputs (s). ffmpeg_threads: threads per ffmpeg (0 = auto).
     |    single_pass=False : legacy chain re-encode -> change fps -> trim_folder (three lossy encodes, and the
@@ -381,7 +383,7 @@ def ds_process(source_folder
     if single_pass:
         align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
                      , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
-                     , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=crf_single_pass
+                     , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=0 if lossless else crf_single_pass
                      , threads=ffmpeg_threads)
         if combine_videos:
             combine_folder(source_folder=target_folder + trimed_path + folder_tag
@@ -452,6 +454,8 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                                     , target_fps=30
                                     , single_pass=True
                                     , ffmpeg_threads=0
+                                    , lossless=True
+                                    , crf_single_pass=18
                                     ):
     
     folder_tag = Path(source_folder).parts[folder_tag_idx] + "/"
@@ -474,6 +478,8 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                     , target_fps=target_fps
                     , single_pass=single_pass
                     , ffmpeg_threads=ffmpeg_threads
+                    , lossless=lossless
+                    , crf_single_pass=crf_single_pass
                     )
 
 def ds_process_parallel(sources , folder_tag_idx =-3
@@ -493,6 +499,8 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                     , single_pass=True
                                     , processes=None
                                     , ffmpeg_threads=0
+                                    , lossless=True
+                                    , crf_single_pass=18
                                     ):
     """
         from ducksoup import ds_process_parallel
@@ -502,6 +510,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
         processes : number of interactions processed in parallel (default: all cores of the machine; on a cluster,
             use the cores allocated to the job, e.g. int(os.environ["SLURM_CPUS_PER_TASK"]) // ffmpeg_threads)
         ffmpeg_threads : threads per ffmpeg process (0 = auto, i.e. all cores)
+        lossless, crf_single_pass : video quality of the single-pass encode (see help(ds_process))
 
     """
     import multiprocessing
@@ -527,5 +536,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                   , repeat(target_fps)
                                   , repeat(single_pass)
                                   , repeat(ffmpeg_threads)
+                                  , repeat(lossless)
+                                  , repeat(crf_single_pass)
                                   )
                     )
