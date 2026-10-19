@@ -60,7 +60,7 @@ def make_clip(path, rec_start, length, size=(320, 240), audio_length=None, size2
         if interferer:   # another speaker, 6 dB louder, at its own times (not locked to the target); noise -30 dB
             oth = "+".join(f"between(t+{off - lead},{e},{e + 0.25})" for e in OTHER_VOICE)
             other = f"+1.0*sin(2*PI*700*t)*({oth})+0.03*(2*random(1)-1)"
-        subprocess.run(["ffmpeg", "-v", "error", "-y",
+        subprocess.run(["ffmpeg", "-threads", "2", "-v", "error", "-y",
                         "-f", "lavfi", "-i", f"color=c=0x303030:s={wh[0]}x{wh[1]}:r={FPS_IN}:d={dur_v}",
                         # sample-accurate beeps (the `enable` timeline of audio filters works per audio frame),
                         # over a quiet noise floor (-55 dB) so that the audio is not digital silence
@@ -80,7 +80,7 @@ def make_clip(path, rec_start, length, size=(320, 240), audio_length=None, size2
         lst = path + ".txt"
         with open(lst, "w") as fh:
             fh.write(f"file '{a}'\nfile '{b}'\n")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", path],
+        subprocess.run(["ffmpeg", "-threads", "2", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", path],
                        check=True)
         for f in (a, b, lst):
             os.remove(f)
@@ -105,7 +105,7 @@ def write_log(folder, pipeline_starts, pipeline_stops=(), audio_in=(), audio_fx=
 def flashes(video):
     """Onset times (s) of white frames."""
     w, h = 8, 6
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", video, "-vf", f"scale={w}:{h},format=gray",
+    raw = subprocess.run(["ffmpeg", "-threads", "2", "-v", "error", "-i", video, "-vf", f"scale={w}:{h},format=gray",
                           "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
     m = np.frombuffer(raw, np.uint8).reshape(-1, w * h).mean(1) > 128
     on = np.flatnonzero(m[1:] & ~m[:-1]) + 1
@@ -115,7 +115,7 @@ def flashes(video):
 def black_until(video):
     """Time (s) of the first frame that is not completely black (synthetic clips: dark gray background)."""
     w, h = 8, 6
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", video, "-vf", f"scale={w}:{h},format=gray",
+    raw = subprocess.run(["ffmpeg", "-threads", "2", "-v", "error", "-i", video, "-vf", f"scale={w}:{h},format=gray",
                           "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
     m = np.frombuffer(raw, np.uint8).reshape(-1, w * h).mean(1) > 8
     return np.argmax(m) / FPS_OUT

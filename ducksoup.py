@@ -5,6 +5,23 @@ try:
 except ImportError:
     from align import align_folder
 from pathlib import Path
+
+
+def default_cores():
+    """Default CPU budget: half of the machine's cores (at least 1), so that the computer stays usable."""
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def _limit_threads():
+    """In a worker process: low priority, and numeric libraries limited to 1 thread each (the parallelism is the
+    workers and their ffmpeg threads), so that the run never takes more than its CPU budget."""
+    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+              "TF_NUM_INTRAOP_THREADS", "TF_NUM_INTEROP_THREADS"):
+        os.environ[v] = "1"
+    try:
+        os.nice(10)
+    except OSError:
+        pass
 import glob
 import os
 import numpy as np
@@ -167,7 +184,38 @@ def stack_videos(files, output, tile="640:480"):
 
 
 ##-- combine_folder
+class _quiet:
+    """Silence the output of the external programs (ffmpeg) called inside the block, when not verbose."""
+    def __init__(self, verbose):
+        self.on = not verbose
+
+    def __enter__(self):
+        if self.on:
+            import sys
+            sys.stdout.flush(); sys.stderr.flush()
+            self.saved = os.dup(1), os.dup(2)
+            self.null = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(self.null, 1); os.dup2(self.null, 2)
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            import sys
+            sys.stdout.flush(); sys.stderr.flush()     # what was printed inside goes to /dev/null too
+            os.dup2(self.saved[0], 1); os.dup2(self.saved[1], 2)
+            for f in (*self.saved, self.null):
+                os.close(f)
+        return False
+
+
 def combine_folder(source_folder, folder_tag, target_folder, combined_path, combined_with_audio_path,extension= ".mp4", combine_audio_flag=True, verbose=True):
+    with _quiet(verbose):
+        _combine_folder(source_folder, folder_tag, target_folder, combined_path, combined_with_audio_path, extension,
+                        combine_audio_flag, verbose)
+
+
+def _combine_folder(source_folder, folder_tag, target_folder, combined_path, combined_with_audio_path, extension,
+                    combine_audio_flag, verbose):
     if verbose:
         print("combining videos with ffmpeg...")
         print()
@@ -206,30 +254,21 @@ def combine_folder(source_folder, folder_tag, target_folder, combined_path, comb
         stack_videos(organised_files, output)
 
 
-    #extract and combine audios
+    #extract and combine audios (temporary files in a temporary folder, removed even if something fails)
     if combine_audio_flag:
-        import uuid 
-        if not os.path.isdir(target_folder + combined_with_audio_path):
-            os.mkdir(target_folder + combined_with_audio_path)
-
-        audios = []
-        files = glob.glob(source_folder + "*"+ extension)
-        for cpt1, file in enumerate(files):
-            audio_name = str(cpt1) + str(uuid.uuid1()) +"____.wav"
-            extract_audio(file, audio_name)
-            audios.append(audio_name)
-
-        aux_wav = str(uuid.uuid1()) + ".wav"
-        combine_audio(audios, aux_wav)
-
-        #replace audio
-        file_tag = get_file_without_path(output)
-        replace_audio(output,  aux_wav, target_folder + combined_with_audio_path + file_tag + extension)
-
-        for audio in audios:
-            os.remove(audio)
-        
-        os.remove( aux_wav)
+        import tempfile
+        os.makedirs(target_folder + combined_with_audio_path, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            audios = []
+            for cpt1, file in enumerate(sorted(glob.glob(source_folder + "*" + extension))):
+                audio_name = os.path.join(tmp, str(cpt1) + ".wav")
+                extract_audio(file, audio_name)
+                audios.append(audio_name)
+            aux_wav = os.path.join(tmp, "combined.wav")
+            combine_audio(audios, aux_wav)
+            #replace audio
+            file_tag = get_file_without_path(output)
+            replace_audio(output, aux_wav, target_folder + combined_with_audio_path + file_tag + extension)
 
 
 def ds_process_audio_only(source_folder
@@ -325,8 +364,9 @@ def ds_process(source_folder
                             , log_folder=None
                             , duration=None
                             , write_wav=True
-                            , ffmpeg_threads=0
+                            , ffmpeg_threads=None
                             , av_sync=True
+                            , n_cores=None
                             ):
     """
     | A function to preprocess recordings made with ducksoup.
@@ -359,6 +399,7 @@ def ds_process(source_folder
     |        holds audio recorded before its video started is moved by that offset (estimated from the durations
     |        and verified on the content), and each output is measured again; all reported in alignment.csv.
     |        av_sync=False: offsets from the durations only (flagged as unverified), no output check.
+    |    n_cores : CPU cores this call may use (default: half of the machine's cores). ffmpeg_threads overrides it.
     |    single_pass=False : legacy chain re-encode -> change fps -> trim_folder (three lossy encodes, and the
     |        alignment problems described in trim_folder).
     | Usage Example: 
@@ -371,15 +412,8 @@ def ds_process(source_folder
     |   
     | Also, this function can be used in parallel with ds_process_parallel
     """
-    # create target folder if it doesn't exist, if it exists, pass
-    if not os.path.isdir(target_folder):
-        try:
-            import errno
-            os.mkdir(target_folder)
-        except OSError as exc:
-            if exc.errno != errno.EEXIST:
-                raise
-            pass
+    # create the target folder (and its parents) if needed
+    os.makedirs(target_folder, exist_ok=True)
     
     if verbose:
         print(folder_tag)
@@ -389,7 +423,7 @@ def ds_process(source_folder
         align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
                      , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
                      , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=0 if lossless else crf_single_pass
-                     , threads=ffmpeg_threads, av_sync=av_sync, av_check=av_sync)
+                     , threads=ffmpeg_threads or n_cores or default_cores(), av_sync=av_sync, av_check=av_sync)
         if combine_videos:
             combine_folder(source_folder=target_folder + trimed_path + folder_tag
                            , folder_tag=folder_tag
@@ -443,7 +477,7 @@ def ds_process(source_folder
 
 
 ## Parallel processing functions
-def parallelize_function(source_folder, folder_tag_idx =-3
+def parallelize_function(source_folder, folder_tag_idx=None
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -463,9 +497,14 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                                     , crf_single_pass=18
                                     , av_sync=True
                                     ):
-    
-    folder_tag = Path(source_folder).parts[folder_tag_idx] + "/"
-    print("the folder tag is : " + folder_tag)
+    _limit_threads()
+    # interaction name: the folder that contains recordings/ (or the path part at folder_tag_idx, if given)
+    parts = Path(source_folder).parts
+    if folder_tag_idx is None:
+        folder_tag_idx = -2 if parts[-1] == "recordings" else -1
+    folder_tag = parts[folder_tag_idx] + "/"
+    if verbose:
+        print("the folder tag is : " + folder_tag)
 
     ds_process(source_folder = source_folder
                     , folder_tag = folder_tag
@@ -489,7 +528,7 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                     , av_sync=av_sync
                     )
 
-def ds_process_parallel(sources , folder_tag_idx =-3
+def ds_process_parallel(sources , folder_tag_idx=None
                                     , target_folder="preproc/" 
                                     , extension=".mp4"
                                     , trimed_path="trimed/"
@@ -505,19 +544,22 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                     , target_fps=30                     
                                     , single_pass=True
                                     , processes=None
-                                    , ffmpeg_threads=0
+                                    , ffmpeg_threads=None
                                     , lossless=True
                                     , crf_single_pass=18
                                     , av_sync=True
+                                    , n_cores=None
                                     ):
     """
         from ducksoup import ds_process_parallel
-        folder_tag_idx : is the place where the * is, in the path. The place where recoridngs are blocked by.
+        folder_tag_idx : position of the interaction folder in the path (default: the folder that contains
+            recordings/, e.g. data/<session>/<interaction>/recordings/ -> <interaction>)
         ds_process_parallel(sources = "videos/latest_30_10_b/test_2/*/recordings/")
         check help(ds_process) for other arguments
-        processes : number of interactions processed in parallel (default: all cores of the machine; on a cluster,
-            use the cores allocated to the job, e.g. int(os.environ["SLURM_CPUS_PER_TASK"]) // ffmpeg_threads)
-        ffmpeg_threads : threads per ffmpeg process (0 = auto, i.e. all cores)
+        n_cores : CPU cores the whole run may use (default: half of the machine's cores, so that the computer stays
+            usable). They are split into interactions processed in parallel x 2 ffmpeg threads each. On a cluster,
+            use the cores allocated to the job: n_cores=int(os.environ["SLURM_CPUS_PER_TASK"]).
+        processes, ffmpeg_threads : set the split by hand instead (both override n_cores)
         lossless, crf_single_pass : video quality of the single-pass encode (see help(ds_process))
         av_sync : audio-video sync within each recording (see help(ds_process))
 
@@ -525,6 +567,9 @@ def ds_process_parallel(sources , folder_tag_idx =-3
     import multiprocessing
     from itertools import repeat
     
+    n_cores = n_cores or default_cores()
+    ffmpeg_threads = ffmpeg_threads or min(2, n_cores)
+    processes = processes or max(1, n_cores // ffmpeg_threads)
     pool_obj = multiprocessing.Pool(processes)
     a_args     = glob.glob(sources)
     

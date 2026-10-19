@@ -1,72 +1,71 @@
 # prepro
-Preprocessing of the recordings made with [DuckSoup](https://github.com/ducksouplab/ducksoup): every participant's videos and audio of an interaction are put on **one clock** (time 0 = start of the interaction), with **audio and video in sync**, reconnections joined, and one lossless encode. A manifest (`alignment.csv`) documents every decision.
+Preprocessing of the recordings made with [DuckSoup](https://github.com/ducksouplab/ducksoup), in **one function call**. Afterwards:
+- every participant's video and audio of an interaction are on **one clock** (time 0 = start of the interaction);
+- **audio and video are in sync**, within each recording and between the participants;
+- reconnections are joined, with gaps where nothing was recorded;
+- everything is encoded once, without loss, at native resolution;
+- a manifest (`alignment.csv`) documents every decision.
 
-**Start with the tutorial:** [`tutorial/preprocessing_tutorial.ipynb`](tutorial/preprocessing_tutorial.ipynb). It builds a synthetic interaction containing each problem, runs the preprocessing step by step, explains all parameters and the manifest, and checks the result. It needs no data.
+**Tutorial:** [`tutorial/preprocessing_tutorial.ipynb`](tutorial/preprocessing_tutorial.ipynb) runs it on a small synthetic experiment (no data needed), and shows the result and how to use it.
 
-## Installation:
-To install it please do the following:
-
-First, create a new conda environment with requirements:
+## Installation
 ```
 conda create --name ds_prepro python=3.10
 conda activate ds_prepro
-pip install numpy soundfile pandas opencv-python
-pip install mediapipe        # optional, recommended: best audio-video sync measurement (see below)
-```
+pip install numpy pandas soundfile opencv-python
+pip install mediapipe                  # optional, recommended: best audio-video sync measurement
+brew install ffmpeg                    # on a cluster: tutorial/build_ffmpeg_locally_for_HPC.md
 
-Second, install dependencies such as ffmpeg.
-```
-brew install ffmpeg
-```
-
-Third, clone the repository, as well as the one containing some dependencies:
-```
 git clone https://github.com/ducksouplab/prepro.git
-git clone https://github.com/Pablo-Arias/STIM.git 
-```
-
-Add these to your path—see below if you have an error with these commands:
-```
+git clone https://github.com/Pablo-Arias/STIM.git
 conda develop "$(pwd)/STIM"
 conda develop "$(pwd)/prepro"
 ```
-
-Sometimes the conda develop is not recognised by the system. In that case, just put these lines of code at the begining of your script:
-```
+If `conda develop` does not work on your system, add the two folders to the path at the top of your script:
+```python
 import sys
-from pathlib import Path
-
-root = Path(__file__).resolve().parent   # directory that contains the script, where the repositories are located, change as required
-sys.path.append(str(root / "STIM"))
-sys.path.append(str(root / "prepro"))
-
-# now you can do:
-import stim          # whatever the package's top-level name is
-import prepro
+sys.path.append("/path/to/STIM")
+sys.path.append("/path/to/prepro")
+```
+With mediapipe, also download its face model, then either set `PREPRO_FACE_MODEL` to its path or keep it in `prepro/models/face_landmarker.task`:
+```
+curl -o prepro/models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 ```
 
-
-For the MediaPipe sync measurement, download the face landmarker model, then point `PREPRO_FACE_MODEL` at it, or keep it at `models/face_landmarker.task`:
-```
-curl -o models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
-```
-
-## Quick start
-Put the raw DuckSoup data (`<session>/<interaction>/recordings/*.mp4` plus the interaction's `*.log` files) in a folder, then:
+## Usage
+The raw DuckSoup data of a session is one folder per interaction, holding `recordings/*.mp4` and the interaction's `*.log` files. One call processes them all:
 ```python
 from ducksoup import ds_process_parallel
-ds_process_parallel(sources="data/first_data_set/*/recordings/", target_folder="preproc/first_data_set/",
-                    folder_tag_idx=-2, processes=8, ffmpeg_threads=2)   # -2: the interaction folder in the path
+
+ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc/my_session/")
 ```
-or, for one interaction, without the combination step:
-```python
-import align
-align.align_folder("data/s1/1-p1p2/recordings/", "1-p1p2/", "preproc/s1/")
-```
-`prepro_example.py` shows the same thing as a script.
 
+The output, in `target_folder`:
+- `trimed/<interaction>/`: one mp4 and one WAV per participant and version (`dry`: the camera; `wet`: after the effect, as the partner saw it), plus `alignment.csv`;
+- `combined/` and `with_audio/`: the participants of each interaction side by side, for checking by eye.
 
+Options you may want:
 
+| option | default | |
+|---|---|---|
+| `n_cores` | half of the machine's cores | CPU cores the run may use. On a cluster, the cores of the job: `n_cores=int(os.environ["SLURM_CPUS_PER_TASK"])` |
+| `lossless` | `True` | lossless video, for analyses (~200 MB per 4-min 800x600 video). `False`: visually lossless and much smaller |
+| `combine_videos` | `True` | also make the side-by-side check videos |
+| `duration` | `None` | cut the outputs at this many seconds from the start |
+| `av_sync` | `True` | measure and correct the audio-video sync. `False`: from the log durations only |
+| `verbose` | `True` | print the progress (and the ffmpeg logs of the side-by-side videos) |
+
+All other options: `help(ds_process)`. One interaction at a time: `ds_process(source_folder, folder_tag, target_folder)`.
+
+**Time:** with mediapipe, about 3–5 min of CPU per 4-min recording (sync measurement, lossless encode, check). Run large datasets on a cluster, e.g. one Slurm task per session.
+
+**After a run,** look in `alignment.csv` at:
+- outputs whose `av_check` is `mismatch`;
+- outputs whose `offset_source` is `duration` (unverified);
+- the `notes` column;
+- `status` values other than `ok`.
+
+The rest of this README explains what is done and why.
 
 ## What the preprocessing does
 `ds_process` (single pass, the default) calls `align.align_folder` for each interaction. It aligns and encodes each output (one per participant and version, dry or wet) in **one** ffmpeg pass from the original recordings:

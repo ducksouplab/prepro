@@ -45,6 +45,7 @@ import subprocess
 
 import numpy as np
 
+THREADS = 2               # threads of the ffmpeg decodes of this module (align_folder sets it from its `threads`)
 FPS = 30                  # analysis frame rate
 WIDTH = 320               # analysis frame width (px)
 MAX_LAG_S = 5.0           # largest offset searched / applied
@@ -64,7 +65,7 @@ WAIT_MARGIN_S = 0.3       # queued audio <= wait + this (event timing, packetisa
 # Features
 # ---------------------------------------------------------------------------------------------
 def _ffmpeg_input(path, start, duration):
-    a = ["ffmpeg", "-v", "error", "-nostdin"]
+    a = ["ffmpeg", "-v", "error", "-nostdin", "-threads", str(THREADS)]
     if start:
         a += ["-ss", f"{start:.6f}"]
     a += ["-i", path]

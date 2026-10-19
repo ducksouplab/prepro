@@ -415,7 +415,7 @@ def plan_interaction(source_folder, extension=".mp4", manips=("dry", "wet"), log
 # Render
 # ---------------------------------------------------------------------------------------------
 def build_command(plan, out_video, out_wav=None, fps=30, crf=0, preset="veryfast", audio_codec="aac",
-                  audio_bitrate="320k", sample_rate=48000, wav_codec="pcm_s16le", threads=0):
+                  audio_bitrate="320k", sample_rate=48000, wav_codec="pcm_s16le", threads=2):
     """ffmpeg command (list) that renders one plan.
 
     Segment and gap boundaries are snapped to the output frame grid (multiples of 1/fps from t0), so
@@ -546,9 +546,11 @@ def align_folder(source_folder, folder_tag, target_folder, trimed_path="trimed/"
     face_model    : MediaPipe face landmarker model (.task) for mouth_backend "mediapipe" / "auto"
     twin_sync     : align each wet file on its dry twin (video by image content; audio taken from the dry twin
                     when it is the same microphone signal), see twin_offsets
-    encode        : fps, crf, preset, audio_codec, audio_bitrate, sample_rate, wav_codec, threads
+    encode        : fps, crf, preset, audio_codec, audio_bitrate, sample_rate, wav_codec,
+                    threads (ffmpeg threads for the encode and the sync measurement; default 2)
     Returns the manifest rows (also written to <out folder>/alignment.csv)."""
     out_dir = os.path.join(target_folder, trimed_path, folder_tag)
+    avsync.THREADS = max(1, int(encode.get("threads", 2)))      # the sync measurement decodes with the same threads
     plans, notes = plan_interaction(source_folder, extension, manips, log_folder, duration, av_sync, max_offset,
                                     mouth_backend, face_model, twin_sync)
     os.makedirs(out_dir, exist_ok=True)
