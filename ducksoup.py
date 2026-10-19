@@ -367,6 +367,7 @@ def ds_process(source_folder
                             , ffmpeg_threads=None
                             , av_sync=True
                             , n_cores=None
+                            , face_model=None
                             ):
     """
     | A function to preprocess recordings made with ducksoup.
@@ -423,7 +424,8 @@ def ds_process(source_folder
         align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
                      , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
                      , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=0 if lossless else crf_single_pass
-                     , threads=ffmpeg_threads or n_cores or default_cores(), av_sync=av_sync, av_check=av_sync)
+                     , threads=ffmpeg_threads or n_cores or default_cores(), av_sync=av_sync, av_check=av_sync
+                     , face_model=face_model)
         if combine_videos:
             combine_folder(source_folder=target_folder + trimed_path + folder_tag
                            , folder_tag=folder_tag
@@ -496,6 +498,9 @@ def parallelize_function(source_folder, folder_tag_idx=None
                                     , lossless=True
                                     , crf_single_pass=18
                                     , av_sync=True
+                                    , duration=None
+                                    , write_wav=True
+                                    , face_model=None
                                     ):
     _limit_threads()
     # interaction name: the folder that contains recordings/ (or the path part at folder_tag_idx, if given)
@@ -526,6 +531,9 @@ def parallelize_function(source_folder, folder_tag_idx=None
                     , lossless=lossless
                     , crf_single_pass=crf_single_pass
                     , av_sync=av_sync
+                    , duration=duration
+                    , write_wav=write_wav
+                    , face_model=face_model
                     )
 
 def ds_process_parallel(sources , folder_tag_idx=None
@@ -549,20 +557,37 @@ def ds_process_parallel(sources , folder_tag_idx=None
                                     , crf_single_pass=18
                                     , av_sync=True
                                     , n_cores=None
+                                    , duration=None
+                                    , write_wav=True
+                                    , face_model=None
                                     ):
     """
-        from ducksoup import ds_process_parallel
-        folder_tag_idx : position of the interaction folder in the path (default: the folder that contains
-            recordings/, e.g. data/<session>/<interaction>/recordings/ -> <interaction>)
-        ds_process_parallel(sources = "videos/latest_30_10_b/test_2/*/recordings/")
-        check help(ds_process) for other arguments
-        n_cores : CPU cores the whole run may use (default: half of the machine's cores, so that the computer stays
-            usable). They are split into interactions processed in parallel x 2 ffmpeg threads each. On a cluster,
-            use the cores allocated to the job: n_cores=int(os.environ["SLURM_CPUS_PER_TASK"]).
-        processes, ffmpeg_threads : set the split by hand instead (both override n_cores)
-        lossless, crf_single_pass : video quality of the single-pass encode (see help(ds_process))
-        av_sync : audio-video sync within each recording (see help(ds_process))
+    Preprocess every interaction of a DuckSoup session (or several) in one call.
 
+        from ducksoup import ds_process_parallel
+        ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc/my_session/")
+
+    sources        : glob over the recordings/ folders of the interactions (each interaction folder also holds
+                     the DuckSoup *.log files, which give the true recording times)
+    target_folder  : where the outputs go: trimed/<interaction>/ (videos, WAVs, alignment.csv), combined/,
+                     with_audio/ (side-by-side check videos)
+    n_cores        : CPU cores the run may use (default: half of the machine's). On a cluster: the job's cores
+    lossless       : True (default): lossless video, for analyses. False: x264 at crf_single_pass (18: visually
+                     lossless, much smaller)
+    duration       : cut the outputs at this many seconds from the start of the interaction (default: no cut)
+    target_fps     : frame rate of the outputs (default 30)
+    av_sync        : True (default): measure and correct the audio-video sync, and check every output.
+                     False: offsets from the log durations only
+    face_model     : MediaPipe face landmarker model (.task) for the sync measurement (default: the
+                     PREPRO_FACE_MODEL environment variable, or models/face_landmarker.task; without it: OpenCV)
+    combine_videos : True (default): also make the side-by-side check videos (combine_audio_flag: with sound)
+    write_wav      : True (default): a lossless WAV next to each video
+    verbose        : print the progress (default True)
+    extension      : extension of the recordings (default ".mp4")
+    Advanced: folder_tag_idx (position of the interaction folder in the path; default: the folder that contains
+    recordings/), processes and ffmpeg_threads (split n_cores by hand), trimed_path / combined_path /
+    combined_with_audio_path (output sub-folders). single_pass=False runs the legacy chain (resolution, preset,
+    crf, re_encode_path are only used by it).
     """
     import multiprocessing
     from itertools import repeat
@@ -593,5 +618,8 @@ def ds_process_parallel(sources , folder_tag_idx=None
                                   , repeat(lossless)
                                   , repeat(crf_single_pass)
                                   , repeat(av_sync)
+                                  , repeat(duration)
+                                  , repeat(write_wav)
+                                  , repeat(face_model)
                                   )
                     )

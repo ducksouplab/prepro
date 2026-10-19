@@ -6,7 +6,7 @@ Preprocessing of the recordings made with [DuckSoup](https://github.com/ducksoup
 - everything is encoded once, without loss, at native resolution;
 - a manifest (`alignment.csv`) documents every decision.
 
-**Tutorial:** [`tutorial/preprocessing_tutorial.ipynb`](tutorial/preprocessing_tutorial.ipynb) runs it on a small synthetic experiment (no data needed), and shows the result and how to use it.
+**Tutorial:** [`tutorial/preprocessing_tutorial.ipynb`](tutorial/preprocessing_tutorial.ipynb) explains the call, its options, what you get and what to check, and runs it on a small example session.
 
 ## Installation
 ```
@@ -32,38 +32,73 @@ With mediapipe, also download its face model, then either set `PREPRO_FACE_MODEL
 curl -o prepro/models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 ```
 
-## Usage
-The raw DuckSoup data of a session is one folder per interaction, holding `recordings/*.mp4` and the interaction's `*.log` files. One call processes them all:
-```python
-from ducksoup import ds_process_parallel
-
-ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc/my_session/")
+## Usage: one call
+**Your data.** DuckSoup writes one folder per interaction. Keep it as it is, with the `*.log` files next to `recordings/`. They hold the true recording times, on which the alignment is based.
+```
+data/my_session/
+├── 1-p1p2/
+│   ├── recordings/          <- i-…-u-p1-c-1-dry.mp4, i-…-u-p1-c-1-wet.mp4, ...
+│   └── 1-p1p2-a-….log
+├── 1-p3p4/
+└── ...
 ```
 
-The output, in `target_folder`:
-- `trimed/<interaction>/`: one mp4 and one WAV per participant and version (`dry`: the camera; `wet`: after the effect, as the partner saw it), plus `alignment.csv`;
-- `combined/` and `with_audio/`: the participants of each interaction side by side, for checking by eye.
+**The call:**
+```python
+from ducksoup import ds_process_parallel
+ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc/my_session/")
+```
+`sources` matches the `recordings/` folders: use `"data/*/*/recordings/"` for all sessions at once.
+Running the call again on the same `target_folder` skips what is already done, so an interrupted run can be resumed.
 
-Options you may want:
+**What you get** in `target_folder`:
 
-| option | default | |
+| folder | content |
+|---|---|
+| `trimed/<interaction>/` | **the files for your analyses**: one `.mp4` and one `.wav` per participant and version (`dry`: the participant's camera and microphone; `wet`: after the effect, as the partner saw it) |
+| `trimed/<interaction>/alignment.csv` | the report: one row per output (see *Checking a run*) |
+| `combined/`, `with_audio/` | the participants of each interaction side by side, to check by eye |
+
+In all outputs of an interaction, time 0 is the start of the interaction. Frame `k` is at `k / 30` s, and WAV sample `n` is at `n / 48000` s.
+
+**Options.** All have sensible defaults; most users only set `n_cores`, and sometimes `lossless` or `duration`.
+
+| option | default | what it does, and when to change it |
 |---|---|---|
-| `n_cores` | half of the machine's cores | CPU cores the run may use. On a cluster, the cores of the job: `n_cores=int(os.environ["SLURM_CPUS_PER_TASK"])` |
-| `lossless` | `True` | lossless video, for analyses (~200 MB per 4-min 800x600 video). `False`: visually lossless and much smaller |
-| `combine_videos` | `True` | also make the side-by-side check videos |
-| `duration` | `None` | cut the outputs at this many seconds from the start |
-| `av_sync` | `True` | measure and correct the audio-video sync. `False`: from the log durations only |
-| `verbose` | `True` | print the progress (and the ffmpeg logs of the side-by-side videos) |
+| `n_cores` | half of the computer's cores | how many CPU cores the run may use. On a cluster, the cores of your job: `n_cores=int(os.environ["SLURM_CPUS_PER_TASK"])` |
+| `lossless` | `True` | `True`: video without any loss, for face and video analyses (~200 MB per 4-min 800x600 video). `False`: visually lossless and ~10x smaller |
+| `duration` | `None` | cut every output at this many seconds from the start, e.g. `240` for a 4-min task |
+| `target_fps` | `30` | frame rate of the output videos |
+| `av_sync` | `True` | measure and correct the audio-video sync from the content, and check every output. `False`: faster; offsets from the log only, flagged as unverified |
+| `face_model` | `None` | MediaPipe face model for the most accurate sync measurement (see Installation). Default: `PREPRO_FACE_MODEL`, or `models/face_landmarker.task`; without one, OpenCV is used |
+| `combine_videos` | `True` | also make the side-by-side check videos. `False` saves time and space |
+| `write_wav` | `True` | a lossless `.wav` next to each video |
+| `verbose` | `True` | print the progress |
+| `extension` | `".mp4"` | extension of the recordings |
 
-All other options: `help(ds_process)`. One interaction at a time: `ds_process(source_folder, folder_tag, target_folder)`.
+Advanced options are listed in `help(ds_process_parallel)`.
 
-**Time:** with mediapipe, about 3–5 min of CPU per 4-min recording (sync measurement, lossless encode, check). Run large datasets on a cluster, e.g. one Slurm task per session.
+**Typical calls:**
+```python
+# smaller files, only the first 4 minutes, no check videos
+ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc_small/my_session/",
+                    lossless=False, duration=240, combine_videos=False)
+# all sessions, with the MediaPipe sync measurement, on 16 cores
+ds_process_parallel(sources="data/*/*/recordings/", target_folder="preproc/", n_cores=16,
+                    face_model="models/face_landmarker.task")
+```
+On a cluster, run one job per session; the [tutorial](tutorial/preprocessing_tutorial.ipynb) has a Slurm example. With MediaPipe, a 4-min recording takes about 3–5 min of CPU.
 
-**After a run,** look in `alignment.csv` at:
-- outputs whose `av_check` is `mismatch`;
-- outputs whose `offset_source` is `duration` (unverified);
-- the `notes` column;
-- `status` values other than `ok`.
+**Checking a run.** Read `trimed/<interaction>/alignment.csv`:
+
+| column | look for |
+|---|---|
+| `status` | `ok`. Otherwise: `skipped_empty_file` (DuckSoup wrote an empty recording), `skipped_before_t0`, `ffmpeg_error: …` |
+| `covered_s`, `n_gaps`, `gaps_s` | the recorded time, and the reconnection gaps (black frames and silence: mask them in analyses) |
+| `audio_offset_s`, `video_offset_s` | the corrections applied |
+| `offset_source` | `duration+content` / `content`: verified. `duration`: unverified |
+| `av_check` | sync of the finished video: `ok`, `inconclusive` (too little visible talking to tell), `mismatch` (look at it) |
+| `notes` | anything worth a look |
 
 The rest of this README explains what is done and why.
 
