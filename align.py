@@ -30,7 +30,7 @@ What this module does, per interaction folder:
       each output ends at the end of that participant's last segment (or at `duration`);
     - one encode: native resolution (largest frame size of the participant's segments, other
       sizes are scaled to fit and padded, aspect ratio kept), constant `fps`, x264 at `crf`
-      (0 = lossless), audio AAC in the mp4 and, optionally, a lossless WAV next to it;
+      (default 18, visually identical to lossless; 0 = lossless), audio AAC in the mp4 and, optionally, a lossless WAV next to it;
     - audio-video sync within each recording: some DuckSoup files hold audio recorded before their
       video starts (the audio queued while the participant waited), with both tracks written from
       timestamp 0, so their audio is late. The offset of each file is estimated from its durations
@@ -414,7 +414,7 @@ def plan_interaction(source_folder, extension=".mp4", manips=("dry", "wet"), log
 # ---------------------------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------------------------
-def build_command(plan, out_video, out_wav=None, fps=30, crf=0, preset="veryfast", audio_codec="aac",
+def build_command(plan, out_video, out_wav=None, fps=30, crf=18, preset="veryfast", audio_codec="aac",
                   audio_bitrate="320k", sample_rate=48000, wav_codec="pcm_s16le", threads=2):
     """ffmpeg command (list) that renders one plan.
 

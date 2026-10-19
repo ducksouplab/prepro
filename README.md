@@ -3,7 +3,7 @@ Preprocessing of the recordings made with [DuckSoup](https://github.com/ducksoup
 - every participant's video and audio of an interaction are on **one clock** (time 0 = start of the interaction);
 - **audio and video are in sync**, within each recording and between the participants;
 - reconnections are joined, with gaps where nothing was recorded;
-- everything is encoded once, without loss, at native resolution;
+- everything is encoded once, at native resolution, visually identical to the recordings (or lossless if you ask);
 - a manifest (`alignment.csv`) documents every decision.
 
 **Tutorial:** [`tutorial/preprocessing_tutorial.ipynb`](tutorial/preprocessing_tutorial.ipynb) explains the call, its options, what you get and what to check, and runs it on a small example session.
@@ -43,6 +43,8 @@ data/my_session/
 └── ...
 ```
 
+> **Keep your original DuckSoup recordings and logs.** prepro never modifies them, but its outputs are a processed copy (re-encoded, cut at the start of the interaction, reconnections joined). The originals are the only complete record, and you may want to preprocess again later, e.g. with other options or a newer prepro.
+
 **The call:**
 ```python
 from ducksoup import ds_process_parallel
@@ -66,7 +68,7 @@ In all outputs of an interaction, time 0 is the start of the interaction. Frame 
 | option | default | what it does, and when to change it |
 |---|---|---|
 | `n_cores` | half of the computer's cores | how many CPU cores the run may use. On a cluster, the cores of your job: `n_cores=int(os.environ["SLURM_CPUS_PER_TASK"])` |
-| `lossless` | `True` | `True`: no loss added to the recordings (~400–600 MB per 4-min video). `False`: x264 CRF 18, visually lossless, ~7x smaller, and enough for most analyses (see below) |
+| `lossless` | `False` | `False`: x264 CRF 18, visually identical to lossless and about the size of the originals; enough for almost all analyses. `True`: no loss added at all (~7x larger), for pixel-level measures such as rPPG (see below) |
 | `duration` | `None` | cut every output at this many seconds from the start, e.g. `240` for a 4-min task |
 | `target_fps` | `30` | frame rate of the output videos |
 | `av_sync` | `True` | measure and correct the audio-video sync from the content, and check every output. `False`: faster; offsets from the log only, flagged as unverified |
@@ -78,16 +80,19 @@ In all outputs of an interaction, time 0 is the start of the interaction. Frame 
 
 Advanced options are listed in `help(ds_process_parallel)`.
 
-**Lossless or not?** Usually not needed.
+**Lossless or not?** Usually not: the default (`lossless=False`) is enough.
 - **Why:** DuckSoup records the WebRTC streams as the browsers sent them. These are already compressed live, at a modest resolution: mostly 600x450 or 800x600, at ~1–1.5 Mbit/s. When a participant's connection was weak, the browser lowered the resolution during the call (down to 400x300 or 300x225); prepro then scales those parts up to the recording's largest size, which adds no detail.
-- **`lossless=False`** re-encodes once more at x264 CRF 18. This adds a loss that is invisible next to that original compression, and the files are about as small as the originals (~60–80 MB per 4-min recording). **It is enough for almost all analyses:** face landmarks and action units (MediaPipe, py-feat, OpenFace), gestures and body motion, annotation, watching.
-- **`lossless=True`** (the default) guarantees that no further loss is added: the frames are exactly those of the recording. That is ~7x larger files (~400–600 MB per 4-min recording). **Use it for pixel-level measures** that depend on tiny colour or brightness changes, such as remote heart rate (rPPG), or when you want an archive with no added processing.
+- **`lossless=False` (default)** re-encodes once at x264 CRF 18. Measured against the lossless version of the same recordings, it is visually identical: SSIM ≈ 0.99 and PSNR 46–50 dB, never below 44 dB, where above ~40 dB is generally invisible. The files are about the size of the originals (~60–80 MB per 4-min recording). It is enough for face landmarks and action units (MediaPipe, py-feat, OpenFace), gestures and body motion, annotation and watching. For an even closer copy, lower `crf_single_pass` (e.g. 12); files grow accordingly.
+- **`lossless=True`** adds no loss at all: the frames are exactly those of the recording, in files ~7x larger (~400–600 MB per 4-min recording). Use it for pixel-level measures that depend on tiny colour or brightness changes, such as remote heart rate (rPPG).
 
 **Typical calls:**
 ```python
-# smaller files, only the first 4 minutes, no check videos
-ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc_small/my_session/",
-                    lossless=False, duration=240, combine_videos=False)
+# only the first 4 minutes, no check videos
+ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc/my_session/",
+                    duration=240, combine_videos=False)
+# lossless outputs, e.g. for remote heart rate (rPPG)
+ds_process_parallel(sources="data/my_session/*/recordings/", target_folder="preproc_lossless/my_session/",
+                    lossless=True)
 # all sessions, with the MediaPipe sync measurement, on 16 cores
 ds_process_parallel(sources="data/*/*/recordings/", target_folder="preproc/", n_cores=16,
                     face_model="models/face_landmarker.task")
@@ -115,7 +120,7 @@ The rest of this README explains what is done and why.
 3. **Audio-video sync within each recording.** Audio queued while a participant waited is written at the start of the file, so the audio can be late by up to a few seconds. It is measured and removed (`avsync.py`); see below.
 4. **Wet files on the dry clock.** The wet video, which went through the effect, can start later than the dry one. It is aligned on its dry twin, and it carries the dry audio when there is no audio effect; see below.
 5. **One encode, native resolution.**
-   - Lossless x264 with `lossless=True` (the default: ~400–600 MB per 4-min video), or `crf_single_pass` with `lossless=False` (default 18: visually lossless and much smaller).
+   - x264 at `crf_single_pass` (default 18: visually identical to lossless, about the size of the originals), or lossless with `lossless=True` (~7x larger, for pixel-level measures such as rPPG).
    - Constant `target_fps` and no rescaling: if the resolution changes during a recording, the largest size is used and the aspect ratio is kept.
    - A lossless WAV is written next to each mp4 (`write_wav`).
 6. **Manifest.** `trimed/<interaction>/alignment.csv` lists, for each output, the segments used, the gaps, the covered time, the time with audio, the audio and video offsets (with their evidence) and the sync check. Analyses can use it to mask the gaps and audit the sync.

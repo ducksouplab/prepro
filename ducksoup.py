@@ -359,7 +359,7 @@ def ds_process(source_folder
                             , crf = "18"
                             , target_fps = "30"
                             , single_pass=True
-                            , lossless=True
+                            , lossless=False
                             , crf_single_pass=18
                             , log_folder=None
                             , duration=None
@@ -392,8 +392,8 @@ def ds_process(source_folder
     |        aligned on the recording starts read from the DuckSoup logs (log_folder, default: the parent of
     |        source_folder), reconnection segments joined on one timeline with the gaps filled with black frames
     |        and silence, native resolution (resolution and re_encode_path are not used), constant target_fps,
-    |        x264 lossless if lossless=True (default, large files), else at crf_single_pass (default 18, visually
-    |        lossless and much smaller), a lossless WAV next to each mp4 (write_wav), and a manifest
+    |        x264 at crf_single_pass (default 18: visually identical to lossless, about the size of the originals) or
+    |        lossless if lossless=True (pixel-level measures such as rPPG; ~7x larger), a lossless WAV next to each mp4 (write_wav), and a manifest
     |        trimed_path/folder_tag/alignment.csv with the gaps and the covered time of each output.
     |        duration: optional maximum length of the outputs (s). ffmpeg_threads: threads per ffmpeg (0 = auto).
     |        av_sync=True: audio-video sync within each recording (align.py / avsync.py): the audio of a file that
@@ -495,7 +495,7 @@ def parallelize_function(source_folder, folder_tag_idx=None
                                     , target_fps=30
                                     , single_pass=True
                                     , ffmpeg_threads=0
-                                    , lossless=True
+                                    , lossless=False
                                     , crf_single_pass=18
                                     , av_sync=True
                                     , duration=None
@@ -553,7 +553,7 @@ def ds_process_parallel(sources , folder_tag_idx=None
                                     , single_pass=True
                                     , processes=None
                                     , ffmpeg_threads=None
-                                    , lossless=True
+                                    , lossless=False
                                     , crf_single_pass=18
                                     , av_sync=True
                                     , n_cores=None
@@ -572,11 +572,11 @@ def ds_process_parallel(sources , folder_tag_idx=None
     target_folder  : where the outputs go: trimed/<interaction>/ (videos, WAVs, alignment.csv), combined/,
                      with_audio/ (side-by-side check videos)
     n_cores        : CPU cores the run may use (default: half of the machine's). On a cluster: the job's cores
-    lossless       : True (default): no loss added to the recordings (~400-600 MB per 4-min video); needed only for
-                     pixel-level measures such as rPPG. False: x264 at crf_single_pass (18: visually lossless,
-                     ~7x smaller, about the size of the original recordings), enough for most analyses (face
-                     landmarks, action units, gestures): the recordings are already WebRTC-compressed, mostly
-                     600x450 or 800x600 at ~1-1.5 Mbit/s
+    lossless       : False (default): x264 at crf_single_pass (18), about the size of the original recordings
+                     (~60-80 MB per 4-min video) and visually identical to lossless (SSIM ~0.99, PSNR 46-50 dB):
+                     enough for almost all analyses, as the recordings are already WebRTC-compressed (mostly 600x450
+                     or 800x600 at ~1-1.5 Mbit/s). True: no loss added at all (~400-600 MB per 4-min video), for
+                     pixel-level measures such as rPPG. Either way, KEEP THE ORIGINAL RECORDINGS.
     duration       : cut the outputs at this many seconds from the start of the interaction (default: no cut)
     target_fps     : frame rate of the outputs (default 30)
     av_sync        : True (default): measure and correct the audio-video sync, and check every output.
