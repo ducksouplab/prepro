@@ -326,6 +326,7 @@ def ds_process(source_folder
                             , duration=None
                             , write_wav=True
                             , ffmpeg_threads=0
+                            , av_sync=True
                             ):
     """
     | A function to preprocess recordings made with ducksoup.
@@ -354,6 +355,10 @@ def ds_process(source_folder
     |        lossless and much smaller), a lossless WAV next to each mp4 (write_wav), and a manifest
     |        trimed_path/folder_tag/alignment.csv with the gaps and the covered time of each output.
     |        duration: optional maximum length of the outputs (s). ffmpeg_threads: threads per ffmpeg (0 = auto).
+    |        av_sync=True: audio-video sync within each recording (align.py / avsync.py): the audio of a file that
+    |        holds audio recorded before its video started is moved by that offset (estimated from the durations
+    |        and verified on the content), and each output is measured again; all reported in alignment.csv.
+    |        av_sync=False: offsets from the durations only (flagged as unverified), no output check.
     |    single_pass=False : legacy chain re-encode -> change fps -> trim_folder (three lossy encodes, and the
     |        alignment problems described in trim_folder).
     | Usage Example: 
@@ -384,7 +389,7 @@ def ds_process(source_folder
         align_folder(source_folder=source_folder, folder_tag=folder_tag, target_folder=target_folder
                      , trimed_path=trimed_path, extension=extension, log_folder=log_folder, duration=duration
                      , write_wav=write_wav, verbose=verbose, fps=target_fps, crf=0 if lossless else crf_single_pass
-                     , threads=ffmpeg_threads)
+                     , threads=ffmpeg_threads, av_sync=av_sync, av_check=av_sync)
         if combine_videos:
             combine_folder(source_folder=target_folder + trimed_path + folder_tag
                            , folder_tag=folder_tag
@@ -456,6 +461,7 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                                     , ffmpeg_threads=0
                                     , lossless=True
                                     , crf_single_pass=18
+                                    , av_sync=True
                                     ):
     
     folder_tag = Path(source_folder).parts[folder_tag_idx] + "/"
@@ -480,6 +486,7 @@ def parallelize_function(source_folder, folder_tag_idx =-3
                     , ffmpeg_threads=ffmpeg_threads
                     , lossless=lossless
                     , crf_single_pass=crf_single_pass
+                    , av_sync=av_sync
                     )
 
 def ds_process_parallel(sources , folder_tag_idx =-3
@@ -501,6 +508,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                     , ffmpeg_threads=0
                                     , lossless=True
                                     , crf_single_pass=18
+                                    , av_sync=True
                                     ):
     """
         from ducksoup import ds_process_parallel
@@ -511,6 +519,7 @@ def ds_process_parallel(sources , folder_tag_idx =-3
             use the cores allocated to the job, e.g. int(os.environ["SLURM_CPUS_PER_TASK"]) // ffmpeg_threads)
         ffmpeg_threads : threads per ffmpeg process (0 = auto, i.e. all cores)
         lossless, crf_single_pass : video quality of the single-pass encode (see help(ds_process))
+        av_sync : audio-video sync within each recording (see help(ds_process))
 
     """
     import multiprocessing
@@ -538,5 +547,6 @@ def ds_process_parallel(sources , folder_tag_idx =-3
                                   , repeat(ffmpeg_threads)
                                   , repeat(lossless)
                                   , repeat(crf_single_pass)
+                                  , repeat(av_sync)
                                   )
                     )
