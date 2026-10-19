@@ -572,8 +572,11 @@ def ds_process_parallel(sources , folder_tag_idx=None
     target_folder  : where the outputs go: trimed/<interaction>/ (videos, WAVs, alignment.csv), combined/,
                      with_audio/ (side-by-side check videos)
     n_cores        : CPU cores the run may use (default: half of the machine's). On a cluster: the job's cores
-    lossless       : True (default): lossless video, for analyses. False: x264 at crf_single_pass (18: visually
-                     lossless, much smaller)
+    lossless       : True (default): no loss added to the recordings (~400-600 MB per 4-min video); needed only for
+                     pixel-level measures such as rPPG. False: x264 at crf_single_pass (18: visually lossless,
+                     ~7x smaller, about the size of the original recordings), enough for most analyses (face
+                     landmarks, action units, gestures): the recordings are already WebRTC-compressed, mostly
+                     600x450 or 800x600 at ~1-1.5 Mbit/s
     duration       : cut the outputs at this many seconds from the start of the interaction (default: no cut)
     target_fps     : frame rate of the outputs (default 30)
     av_sync        : True (default): measure and correct the audio-video sync, and check every output.
